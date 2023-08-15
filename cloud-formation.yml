@@ -1,0 +1,493 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Resources:
+
+  recipeSQS:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: recipeSQS
+      
+
+  recipeSNS:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: recipeSNS
+      TopicName: recipeSNSTopic
+
+  Mysubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      TopicArn: !Ref recipeSNS
+      Endpoint: !GetAtt [recipeSQS, Arn]
+
+  snsLambdaTrigger:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: snsLambdaTrigger
+      Role: arn:aws:iam::647765930477:role/LabRole
+      Runtime: python3.9
+      PackageType: Zip
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          sns_client = boto3.client("sns")
+
+          def lambda_handler(event, context):
+              
+              response = sns_client.publish(
+              TopicArn='arn:aws:sns:us-east-1:647765930477:recipeSNSTopic',
+              Message='A new recipe has been added, please check the new recipe.',
+              Subject='New recipe Alert'
+              )
+              
+              print(response)
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Hello from Lambda!')
+              }
+
+  snsLambdaTriggerEventSource:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      Enabled: true
+      EventSourceArn: !GetAtt [recipeSQS, Arn]
+      FunctionName: !Ref snsLambdaTrigger
+
+
+  cloudTermDB:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: uuid
+          AttributeType: S
+      KeySchema:
+        - AttributeName: uuid
+          KeyType: HASH
+      TableName: cloudTermDB
+      ProvisionedThroughput:
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+
+
+
+  apiLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: apiLambda
+      Role: arn:aws:iam::647765930477:role/LabRole
+      Runtime: python3.9
+      PackageType: Zip
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import uuid
+          from datetime import date
+          import time
+
+          sqs_client = boto3.client('sqs')
+          # sns_client = boto3.client('sns')
+          db_client = boto3.client('dynamodb')
+
+
+          def lambda_handler(event, context):
+              id = str(uuid.uuid4())
+              print(uuid)
+              if(event is not None):
+                  response = db_client.put_item(
+                      TableName = "cloudTermDB",
+                      Item = {
+                          'uuid': {'S': get_uuid() },
+                          'firstName': {'S': event['firstName']},
+                          'lastName': {'S': event['lastName']},
+                          'email': {'S': event['email']},
+                          'recipeName': {'S': event['recipeName']},
+                          'recipeDescription': {'S': event['recipeDescription']},
+                          'timestamp':{'S': str(get_date())}
+                          }
+                      )
+                      
+                  if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+                      sqs_client.send_message(
+                                  QueueUrl='https://sqs.us-east-1.amazonaws.com/647765930477/recipeSQS',
+                                  MessageBody='A new Recipe is added Please check the Website',
+                                  DelaySeconds=15,
+                              )
+                      return {
+                          'statusCode': 200,
+                          'body': 'Item added to DynamoDB'
+                      }
+                  else:
+                      return {
+                          'statusCode': 500,
+                          'body': 'Error adding item'
+                      }
+                  
+                  
+
+          def get_uuid():
+              id = str(uuid.uuid4())
+              print(uuid)
+              return id;
+              
+          def get_date():
+              today = date.today() 
+              today_date = today.isoformat()
+              print(today_date)
+              return today_date
+
+  subscribeLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: subscribeLambda
+      Role: arn:aws:iam::647765930477:role/LabRole
+      Runtime: python3.9
+      PackageType: Zip
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          sns_client = boto3.client("sns")
+
+          def lambda_handler(event, context):
+              
+              if(event is not None):
+                  response = sns_client.subscribe(
+                              TopicArn='arn:aws:sns:us-east-1:647765930477:recipeSNSTopic',
+                              Protocol='email',
+                              Endpoint=event['email']
+                          )
+
+                  return {
+                      'statusCode': 200,
+                      'body': json.dumps('Hello from Lambda!')
+                  }
+              else:
+                  return {
+                      'statusCode': 415,
+                      'body': json.dumps('Invalid Input from the frontend')
+                  }
+
+  getRecipesLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: getRecipesLambda
+      Role: arn:aws:iam::647765930477:role/LabRole
+      Runtime: python3.9
+      PackageType: Zip
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+
+          db_client = boto3.client('dynamodb')
+
+          def lambda_handler(event, context):
+                  
+              data = db_client.scan(TableName="cloudTermDB")
+              
+              return {
+                  'statusCode': 200,
+                  'data': data['Items']
+              }
+
+
+  apiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: 'apiGateway'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  subscribeResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref apiGateway
+      ParentId: !GetAtt 
+        - apiGateway
+        - RootResourceId
+      PathPart: subscribe
+    DependsOn:
+      - apiGateway
+
+  apiCORSOptionMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ResourceId: !Ref subscribeResource
+      RestApiId: !Ref apiGateway
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+            StatusCode: '200'
+        PassthroughBehavior: NEVER
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+
+  subscribeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ResourceId: !Ref subscribeResource
+      RestApiId: !Ref apiGateway
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - >-
+            arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SUBSCRIBE_LAMBDA}/invocations
+          - SUBSCRIBE_LAMBDA: !GetAtt subscribeLambda.Arn
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: $input.json('$')
+            ResponseParameters:
+                method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: $input.json('$')
+      RequestParameters:
+        method.request.querystring.name: false
+      MethodResponses:
+        - ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+    DependsOn:
+      - subscribeResource
+      - subscribeLambda
+
+  subscribeDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref apiGateway
+      StageName: production
+    DependsOn:
+      - subscribeMethod
+
+  subscribeResourcePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref subscribeLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/*/*"
+    DependsOn:
+      - subscribeDeployment
+
+
+  getRecipesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref apiGateway
+      ParentId: !GetAtt 
+        - apiGateway
+        - RootResourceId
+      PathPart: getRecipes
+    DependsOn:
+      - apiGateway
+
+  getAPICORSOptionMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ResourceId: !Ref getRecipesResource
+      RestApiId: !Ref apiGateway
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+            StatusCode: '200'
+        PassthroughBehavior: NEVER
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+
+  getRecipesMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ResourceId: !Ref getRecipesResource
+      RestApiId: !Ref apiGateway
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - >-
+            arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GETRECIPE_LAMBDA}/invocations
+          - GETRECIPE_LAMBDA: !GetAtt getRecipesLambda.Arn
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: $input.json('$')
+            ResponseParameters:
+                method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: $input.json('$')
+      RequestParameters:
+        method.request.querystring.name: false
+      MethodResponses:
+        - ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+    DependsOn:
+      - getRecipesResource
+      - getRecipesLambda
+
+  getRecipesDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref apiGateway
+      StageName: production
+    DependsOn:
+      - getRecipesMethod
+
+  getRecipesResourcePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref getRecipesLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/*/*"
+    DependsOn:
+      - getRecipesDeployment
+
+
+  sendRecipesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref apiGateway
+      ParentId: !GetAtt 
+        - apiGateway
+        - RootResourceId
+      PathPart: sendRecipes
+    DependsOn:
+      - apiGateway
+
+  sendAPICORSOptionMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ResourceId: !Ref sendRecipesResource
+      RestApiId: !Ref apiGateway
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+            StatusCode: '200'
+        PassthroughBehavior: NEVER
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+
+  sendRecipesMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ResourceId: !Ref sendRecipesResource
+      RestApiId: !Ref apiGateway
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - >-
+            arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SENDRECIPE_LAMBDA}/invocations
+          - SENDRECIPE_LAMBDA: !GetAtt apiLambda.Arn
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: $input.json('$')
+            ResponseParameters:
+                method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+                method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: $input.json('$')
+      RequestParameters:
+        method.request.querystring.name: false
+      MethodResponses:
+        - ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+    DependsOn:
+      - sendRecipesResource
+      - apiLambda
+
+  sendRecipesDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref apiGateway
+      StageName: production
+    DependsOn:
+      - sendRecipesMethod
+
+  sendRecipesResourcePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref apiLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiGateway}/*/*/*"
+    DependsOn:
+      - sendRecipesDeployment
