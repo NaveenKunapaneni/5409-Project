@@ -21,7 +21,7 @@ I have deployed my front-end using AWS ECS and the backend is using lambda as a 
 1. SQS 2. SNS**
 In my application I must send notification to the users whenever there is a new recipe is added, for these I need a messaging service in aws. So, I choose SQS which is subscribed to an SNS topic. The SQS is used to trigger a lambda which then calls the SNS topic to publish the message as soon as any recipe added. I couldn’t find any alternative for these, so I choose these 2 technologies.
 
-![Architecture Image](https://github.com/NaveenKunapaneni/Recipe-Catalouge/blob/main/Cloud%20Architechture.png)
+![Cloud Stack Designer Overview](https://github.com/NaveenKunapaneni/Recipe-Catalouge/blob/main/template1-designer.png)
 
 **Deployment Model:**
 As for the deployment model I have used public cloud. The reason for this approach was the application doesn’t need any fancy encryption and data security apart from the user’s data which will managed when login system was introduced. As per my understanding the users can bear the slightest delay when loading the application as the application is just about the recipes. The availability and reliability of public cloud would be more than enough for the application and its purposes. Considering the application usages and its benefits to the end user I believe that public cloud would save lot of work, maintenance, man power, money and time.
@@ -30,6 +30,7 @@ As for the deployment model I have used public cloud. The reason for this approa
 Based on the AWS services (ECS, lambda, Dynamo DB, SQS, SNS, Api gateway) I guess it is a combination of PaaS and SaaS. My application is providing a service to the user which is the reason I have chosen SaaS. The reason I have choose PaaS is have used lambda, dynamo db and ECS which are platform as a service. The serverless architecture that I am aiming for has derived me to this combination.
   
 **Final Architecture:**
+![Architecture Image](https://github.com/NaveenKunapaneni/Recipe-Catalouge/blob/main/Cloud%20Architechture.png)
  The front-end which react is web app is hosted on the ECS container. When the user interacts with the front-end like see recipes, submit a form for addition of new recipes, subscribe to our mailing list, ECS sends the request to the API gateway. The api gateway send the request based on the type of request. If its submission of a form, then it invokes a apiLambda which writes into a dynamo db and invokes a sqs queue. The sqs queue will invoke a snsLambdaTrigger which is used to publish a message form a sns topic stating that a new recipe is added and all the users unser the sns topic gets a mail. The sns topic which send the mail is the mailing list. If the users access the application, then it gets the data form the db and displays in the front end which is taken care of another getReipeLambda. When a new user wants to join a mailing list then the user submits an email id which is sent to a subscribeLambda which adds the user to the sns topic.
 I have stored all the data inside dynamodb.
   
