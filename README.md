@@ -20,7 +20,9 @@ I have deployed my front-end using AWS ECS and the backend is using lambda as a 
 **General: selected (2)
 1. SQS 2. SNS**
 In my application I must send notification to the users whenever there is a new recipe is added, for these I need a messaging service in aws. So, I choose SQS which is subscribed to an SNS topic. The SQS is used to trigger a lambda which then calls the SNS topic to publish the message as soon as any recipe added. I couldn’t find any alternative for these, so I choose these 2 technologies.
-  
+
+![Architecture Image](https://github.com/NaveenKunapaneni/Recipe-Catalouge/blob/main/Cloud%20Architechture.png)
+
 **Deployment Model:**
 As for the deployment model I have used public cloud. The reason for this approach was the application doesn’t need any fancy encryption and data security apart from the user’s data which will managed when login system was introduced. As per my understanding the users can bear the slightest delay when loading the application as the application is just about the recipes. The availability and reliability of public cloud would be more than enough for the application and its purposes. Considering the application usages and its benefits to the end user I believe that public cloud would save lot of work, maintenance, man power, money and time.
 
